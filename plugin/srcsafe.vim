@@ -1,6 +1,6 @@
 " Source safe commands
 " Author: Michael Geddes <michaelrgeddes@optushome.com.au>
-" Version: 1.14
+" Version: 1.16
 
 " This sourcesafe integration is based on some shell scripts that I've had
 " kicking round for ages to do the same thing.
@@ -23,11 +23,16 @@
 " ss.exe, and on a '.project' file specifying which srcsafe database to use.
 " I have also added some compatability with David's scripts.
 " 
-" The scripts will work if either your srcsafe.ini in the install directory
-" 'includes' your main project, or you have SSDIR set to point to your
-" sourcsafe server project.
+" The scripts require the sourcesafe command-line to be working without
+" prompting for a password.  To do this, there are two main methods. The first
+" is to set the the %SSDIR% enviornment variable.
+" SSDIR=\\server\share\ssdir
 "
-" It works by scanning for a file  '.project' which should be in the root
+" The second is to put the following line in your local srcsafe.ini:
+"     #include \\server\share\ssdir\srcsafe.ini
+"
+"
+" The script works by scanning for a file  '.project' which should be in the root
 " directory of the project. 
 " This file should contain the source-safe path
 " eg:
@@ -36,7 +41,8 @@
 " A sourcesafe path (or inifile) can precede this, inclosed with '@' symbols : 
 " eg:
 " @\\file\srcsafe@$/MyProj/
-"
+" This works by setting (& restoring) $SSDIR before calling the
+" command-line.
 " 
 " Note that in the following, you can specify a count for Get, Diff,  (checkout ??)
 " This does a get of/diff against the specified version.
@@ -93,6 +99,7 @@
 " g:ssShowExtra      (1)         : Show extra status information
 " g:ssUserName       ($USERNAME) : Username for Current user of Sourcesafe
 " g:ssExecutable     ($SS)       : May NOT have spaces - use short-filenames.
+" g:ssDeployFile     (0)         : Allow deploying of files.
 "
 " NOTES:
 " * If the directory $TEMP/SS  (which is required by the script) does not
@@ -153,6 +160,14 @@
 "      - Remove calls to ShortName where possible. (VSS shortname is not
 "        always the same as M$oft shortname anyway!)
 "      - Don't do Diff against project - causes wacky behaviour.
+" 1.15:
+"      - Use 'cat' if &shell contains 'sh'
+"      - Explain $SSDIR & #include in doco.
+" 1.16:
+"      Fixes for William D. Bartholomew
+"      - Add ssDeployFile for the ability to deploy a file by default.
+"      - Fix space in historybuffer temp name.
+"      
 
 
 " Set up defaults (don't override if they already exist)
@@ -170,6 +185,7 @@ call SSDlet('ssMaintainStatus', 1) " Maintain the buffers status as possible.
 call SSDlet('ssShowAllLocks', 1)   " Show all locks on the status line
 call SSDlet('ssShowExtra', 1)      " Show extra status information
 call SSDlet('ssUserName', $USERNAME) " Username for Current user of Sourcesafe
+call SSDlet('ssDeployFile', 0)    "Allow deployment of files.
 
 delfun SSDlet
 
@@ -391,7 +407,7 @@ fun! s:DoSrcSafe(bang, count, cmd, ... )
       let i=i+1
     endwhile
   elseif a:cmd =~?'\<Dep\%[loy]\>'      " Dep^loy
-    if is_me
+    if is_me && !g:ssDeployFile
       let f1=expand('%:h') " Directory, not file
     endif
     while i <= c
@@ -437,20 +453,14 @@ endfun
 
 " The file where the comment is stored!
 let s:commenttmp=$TEMP.'/ss/comment.@@@'
-if !has('unix')
+if !has('unix') && &shell !~ 'sh[a-z.]*$'
 " && system('cat xxy__yzz') =~ "is not recognized"
     fun! s:Cat( filename )
         return system( 'type "'.substitute(a:filename,'/', '\\', 'g').'"')
     endfun
-    fun! s:Find( filename )
-        return system( 'dir /s/b "'.a:filename.'"' )
-    endfun
 else
     fun! s:Cat( filename )
         return system( 'cat "'.a:filename.'"')
-    endfun
-    fun! s:Find( filename)
-        return system( 'find . -name "'.a:filename.'" -print' )
     endfun
 endif
 
@@ -877,7 +887,7 @@ fun! s:DoHistoryWithSyntax(filename)
      return
   endif
 
-  let bname='History!'.fnamemodify(a:filename,':t:gs/\./_/')
+  let bname='History!'.fnamemodify(a:filename,':t:gs/ \./_/')
   let hbufnr=bufnr(bname)
   let hwinnr=bufwinnr(hbufnr)
   if hwinnr==-1
