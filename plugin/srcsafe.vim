@@ -1,6 +1,6 @@
 " Source safe commands
 " Author: Michael Geddes <michaelrgeddes@optushome.com.au>
-" Version: 1.13
+" Version: 1.14
 
 " This sourcesafe integration is based on some shell scripts that I've had
 " kicking round for ages to do the same thing.
@@ -41,8 +41,9 @@
 " Note that in the following, you can specify a count for Get, Diff,  (checkout ??)
 " This does a get of/diff against the specified version.
 " 
-" The scripts do their best to allow the user to respond to prompts.  It does this by always answering 'no', then
-" parsing the response, and asking the user 'yes/no', and then re-executing the command always answering 'yes'.
+" The scripts do their best to allow the user to respond to prompts.  It does
+" this by always answering 'no', then parsing the response, and asking the
+" user 'yes/no', and then re-executing the command always answering 'yes'.
 " It is possible that there are some special cases that need handling.
 " 
 " Here are the commands availble: (replace \ with <localleader>)
@@ -146,6 +147,12 @@
 " 1.13:
 "      - Add interactive mode for answering multiple questions.
 "      - Fix up checking of modified status & automatic reloading of status's
+" 1.14:
+"      - Fix up system call with $VIMRUNTIME containing spaces. -Zak Beck
+"      - Make Get prompt to overwrite a read-only file.
+"      - Remove calls to ShortName where possible. (VSS shortname is not
+"        always the same as M$oft shortname anyway!)
+"      - Don't do Diff against project - causes wacky behaviour.
 
 
 " Set up defaults (don't override if they already exist)
@@ -202,7 +209,7 @@ fun! s:CheckTemp()
     call confirm("Your $TEMP directory doesn't exist!\n'".$TEMP."'")
   else
     if !isdirectory($TEMP.'\ss')
-      call system( 'mkdir '.$TEMP.'\SS')
+      call system( 'mkdir "'.$TEMP.'\SS"')
     endif
   endif
 endfun
@@ -305,10 +312,10 @@ fun! s:DoSrcSafe(bang, count, cmd, ... )
   elseif a:cmd=~?'\<G\%[et]\>'            " G^et
     while i <= c
       if s:CheckOverWrite(f{i})
-        if a:bang == '!'
+        if a:bang.'' == '!'
           call s:SSCmd('Get -R ', f{i}, a:count,  'o')
         else
-          call s:SSCmd('Get', f{i}, a:count,  'o')
+          call s:SSCmd('Get -GWA', f{i}, a:count,  'o')
         endif
         call s:UpdateStatusFor( f{i}, 0 )
       endif
@@ -388,9 +395,30 @@ fun! s:DoSrcSafe(bang, count, cmd, ... )
       let f1=expand('%:h') " Directory, not file
     endif
     while i <= c
-      call s:SSCmd('Deploy'.((a:bang=='!')?' -R': ''), f{i}, a:count, '')
+      call s:SSCmd('Deploy'.((a:bang.'' =='!')?' -R': ''), f{i}, a:count, '')
       let i=i+1
     endwhile
+  elseif a:cmd =~?'\<Dir\%[ectory]\>'   " Dir&etory
+    if a:0==0
+      let f1=getcwd()
+      let c=1
+    endif
+    while i <= c
+      call s:SSCmd('Dir'.((a:bang.'' =='!')?' -R': ''), f{i}, a:count, '')
+      let i=i+1
+    endwhile
+    "let ff=''
+    "while i<= c
+    "  let ff=ff.' '
+    "  if f{i} =~ ' '
+    "    let ff=ff.'"'.f{i}.'"'
+    "  else
+    "    let ff=ff.f{i}
+    "  endif
+    "  let i=i+1
+    "endwhile
+    "call input(ff)
+    "call s:SSCmd('Dir'.((a:bang=='!')?' -R': ''), ff, a:count, '')
   else
       call confirm('SS: Unknown function :"'.a:cmd.'"')
   endif
@@ -415,14 +443,14 @@ if !has('unix')
         return system( 'type "'.substitute(a:filename,'/', '\\', 'g').'"')
     endfun
     fun! s:Find( filename )
-        return system( 'dir /s/b '.a:filename )
+        return system( 'dir /s/b "'.a:filename.'"' )
     endfun
 else
     fun! s:Cat( filename )
         return system( 'cat "'.a:filename.'"')
     endfun
     fun! s:Find( filename)
-        return system( 'find . -name '.a:filename.' -print' )
+        return system( 'find . -name "'.a:filename.'" -print' )
     endfun
 endif
 
@@ -444,6 +472,10 @@ fun! s:UpdateSimilar(filename, extras)
     call s:SSUpdate( a:filename, 'e', a:extras)
   endif
 endfun
+fun! s:system(cmd,args)
+"  echo '+'.a:cmd.'+'.a:args.'+'
+  return system('""'.a:cmd.'" '.a:args.'"')
+endfun
 
 fun! s:SSUpdate( filename, copyold, extras)
   call s:CheckTemp()
@@ -452,13 +484,13 @@ fun! s:SSUpdate( filename, copyold, extras)
   endif
   if a:copyold=='e'
     " Bring up the old comment to be edited
-    call system($VIMRUNTIME.'\gvim -f -u NONE -U NONE -c "set go=aiMr co=30 lines=10"  -c "set nomod" -c "silent e '.s:commenttmp.'.1" -c "silent f %<" -c "set mod"')
+    call s:system($VIMRUNTIME.'\gvim.exe','-f -u NONE -U NONE -c "set go=aiMr co=30 lines=10"  -c "set nomod" -c "silent e '.s:commenttmp.'.1" -c "silent f %:r" -c "set mod"')
   elseif a:copyold=='r'
     " Reuse the old comment
       call rename(s:commenttmp.'.1', s:commenttmp)
   else
     " Create a new comment
-    call system($VIMRUNTIME.'\gvim -f -u NONE -U NONE -c "set go=aiMr co=30 lines=10" "'.s:commenttmp.'"')
+    call s:system($VIMRUNTIME.'\gvim.exe',' -f -u NONE -U NONE -c "set go=aiMr co=30 lines=10" "'.s:commenttmp.'"')
   endif
   if filereadable(s:commenttmp)
     let cmt=s:Cat(s:commenttmp)
@@ -664,6 +696,9 @@ endfun
 
 " Do a SS difference using vim diff.
 fun! s:SSDiff(filename, ssVer)
+  "TODO: Handle diff on directories.
+  if isdirectory(a:filename) || a:filename=='' | return | endif
+
   if !s:CheckSS() | return | endif
   call s:CheckTemp()
   let ssfile=$TEMP."\\ss\\". fnamemodify(a:filename, ':t')
@@ -672,7 +707,7 @@ fun! s:SSDiff(filename, ssVer)
      echoerr 'Invalid project'
      return
   endif
-  let result=system(g:ssExecutable_.' Get -I-Y -GF- -GL'.$TEMP.'\ss '.s:SSVersion(a:ssVer).prjfile)
+  let result=s:system(g:ssExecutable,' Get -I-Y -GF- -GL'.$TEMP.'\ss '.s:SSVersion(a:ssVer).prjfile)
   if filereadable(ssfile) && result !~ "is not an existing" 
     
     call s:SetDiffSplit(ssfile)
@@ -685,12 +720,11 @@ endfun
 fun! s:CheckSS()
   if !exists("g:ssExecutable")
     if !filereadable($SS)
-      let SS=s:ShortName('c:\Program Files\Microsoft Visual Studio\vss\win32\ss.exe')
+      let SS='c:\Program Files\Microsoft Visual Studio\vss\win32\ss.exe'
       if !filereadable(SS)
-        let SS=s:ShortName('c:\Program Files\Microsoft Visual Studio\Common\vss\win32\ss.exe')
+        let SS='c:\Program Files\Microsoft Visual Studio\Common\vss\win32\ss.exe'
       endif
       if filereadable(SS)
-        let g:ssExecutable_=SS
         let g:ssExecutable=SS
       else
         echoe 'Set g:ssExecutable or $SS Variable correctly to point to SS.EXE'
@@ -698,20 +732,6 @@ fun! s:CheckSS()
       endif
     else
         let g:ssExecutable=$SS
-        let g:ssExecutable_=s:ShortName($SS)
-        if !filereadable(g:ssExecutable_)
-          echoe 'Set g:ssExecutable or $SS Variable correctly to point to SS.EXE'
-          return 0
-        endif
-    endif
-  else
-    let exp=expand(g:ssExecutable)
-    if  !exists('g:ssExecutable_') || exp=='' || (exp != expand(g:ssExecutable_))
-      let g:ssExecutable_=s:ShortName(g:ssExecutable)
-      if !filereadable(g:ssExecutable_)
-        echoe 'Set g:ssExecutable or $SS Variable correctly to point to SS.EXE'
-        return 0
-      endif
     endif
   endif
   return 1
@@ -732,10 +752,10 @@ fun! s:SSCmdAdd( filename)
      return
   endif
   " Change project - so the file gets added to the correct one!
-  let result=system( g:ssExecutable_.' CP '.newproj )
+  let result=s:system( g:ssExecutable,' CP '.newproj )
   call s:Success( result)
 
-  let result=system( g:ssExecutable_.' Add -I-N '.a:filename)
+  let result=s:system( g:ssExecutable,' Add -I-N '.a:filename)
 
   " Clear all the answered y/n questions for the prompt.
   let res=substitute(result,'(Y/N)N', '', 'g')
@@ -751,7 +771,7 @@ fun! s:SSCmdAdd( filename)
     endif
   endif
 
-  let result=system(g:ssExecutable_.' '.a:cmd.' -I-Y '.cmdargs)
+  let result=s:system(g:ssExecutable,' '.a:cmd.' -I-Y '.cmdargs)
 
   " Strip out all the questions answered:
   let result=substitute(substitute(result,"[^\n]*(Y/N)Y", '', 'g'),"\n\\+", "\n", 'g')
@@ -807,8 +827,10 @@ fun! s:SSCmd(cmd, filename, ssVer, opts)
 
       " Autoread the file
       setlocal autoread
+
+      echo a:cmd
       " Perform the operation
-      let result=system(g:ssExecutable_.' '.a:cmd.' -I-N '.cmdargs)
+      let result=s:system(g:ssExecutable,' '.a:cmd.' -I-N '.cmdargs)
       " Make sure we know it has been modified.
       checktime
       if !autoread
@@ -832,7 +854,7 @@ fun! s:SSCmd(cmd, filename, ssVer, opts)
   endif 
   " Try again / force 'yes' to questions.
   setlocal autoread
-  let result=system(g:ssExecutable_.' '.a:cmd.' -I-Y '.cmdargs)
+  let result=s:system(g:ssExecutable,' '.a:cmd.' -I-Y '.cmdargs)
 
   " Strip out all the questions answered:
   let result=substitute(substitute(result,"[^\n]*(Y/N)Y", '', 'g'),"\n\\+", "\n", 'g')
@@ -873,7 +895,7 @@ fun! s:DoHistoryWithSyntax(filename)
   setlocal modifiable
   1,$d
 
-  exec '.r !'.g:ssExecutable_.' History '.prjfile
+  exec '.r !""'.g:ssExecutable.'" History "'.prjfile.'""'
   set nomodified
   setlocal nomodifiable
   call s:HistorySyntax()
@@ -882,7 +904,7 @@ endfun
 
 
 fun! s:DoCheckedOutFiles(bang, ...)
-    let bang=a:bang=='!'
+    let bang=a:bang.'' =='!'
     if a:0 == 0
         call s:CheckedOutFiles( getcwd(), '', bang)
     elseif a:0 == 1
@@ -902,7 +924,7 @@ fun! s:CheckedOutFiles( project, user, recursive)
   if ssproj.'' == ''
      echoerr 'Invalid project'
   endif
-  let res=system( g:ssExecutable_.' Status -I-N -NS -O'.tempfile.' '.(a:recursive?'-R ': '').((a:user=='*')?'':'-U'.a:user.' ').s:ShortName(ssproj))
+  let res=s:system( g:ssExecutable,' Status -I-N -NS -O'.tempfile.' '.(a:recursive?'-R ': '').((a:user=='*')?'':'-U'.a:user.' ').s:ShortName(ssproj))
   if !filereadable(tempfile)
     echoerr res
   endif
@@ -1147,15 +1169,15 @@ function! s:GetStatus(filename, include_brief, ShowExtra, ShowAllLocks)
 
   let sBrief=''
 
-  let sCmd = g:ssExecutable_." Status -I-N ".ssname
+  let sCmd = "Status -I-N ".ssname
 
-  let sFull = system(sCmd)
+  let sFull = s:system(g:ssExecutable, sCmd)
   let sLine = sFull
   if (match(sFull,"No checked out files found.") == 0)
     return "Not Locked".((a:include_brief)?"\n@":'')
   elseif (match(sFull,"is not valid SourceSafe syntax") != -1 || 
-          \match(sFull,"is not an existing filename or project") != -1 ||
-          \match(sFull,"has been deleted") != -1)
+\          match(sFull,"is not an existing filename or project") != -1 ||
+\          match(sFull,"has been deleted") != -1)
     return "Not in VSS".((a:include_brief)?"\n":'')
   elseif (strlen(sFull) == 0)
     return ((a:include_brief)?"\n": "")
@@ -1347,6 +1369,10 @@ call s:addMenuMapping('&Uncheckout', '', 's<c-u>',
 command! -complete=file -bang -nargs=* -count=0 SUncheckout call s:DoSrcSafe(<q-bang>,<count>, 'Uncheckout',<f-args>)
 
 call s:addMenuMapping('-s5-', '', '', '')
+call s:addMenuMapping('Directory', '', 's.', 
+\  ':<c-u>call <SID>DoSrcSafe(0, v:count, "Directory", expand("%"))<cr>')
+command! -complete=file -bang -nargs=* -count=0 SDirectory call s:DoSrcSafe(<q-bang>,<count>, 'Directory',<f-args>)
+
 call s:addMenuMapping('S&tatus', '', 'SS',
 \  ':<c-u>call <SID>DoSrcSafe(0, v:count,  "RawStatus", expand("%"))<cr>')
 
@@ -1396,7 +1422,7 @@ call s:addMenuMapping('Admin', '','',':call <SID>SSRun("ssadmin.exe")<CR>')
 
 fun! s:SSRun( prog)
   if !s:CheckSS() | return | endif
-  exe '!start "'.fnamemodify(g:ssExecutable_,':h').'\'.a:prog
+  exe '!start "'.fnamemodify(g:ssExecutable,':h').'\'.a:prog
 endfun
 
 " vim: ts=2 et sw=2
